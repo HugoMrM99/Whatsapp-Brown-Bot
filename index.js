@@ -2,9 +2,44 @@ const qrcode = require('qrcode-terminal');
 //Teste com Sofia
 const chatCode = '120363180567061733@g.us';
 
-const { addPooper, addPoop, checkForMileStones } = require('./dbmanipulation.js');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { addPooper, addPoop, checkMileStones, getBrownCount, checkPoopingRecords, 
+    getPooperByPhone, queryLastPoop, getBrownLeaders } = require('./dbmanipulation.js');
+const { Client, LocalAuth, MessageAck } = require('whatsapp-web.js');
 const client = new Client({ authStrategy : new LocalAuth()});
+
+async function showLeaderBoard(type){
+    let leaderBoardType = '';
+    switch(type){
+        case 'w' : 
+            leaderBoardType = 'desta Semana ';
+            break;
+        case 'm' : 
+            leaderBoardType = 'deste Mês ';
+            break;
+        case 'd' : 
+            leaderBoardType = ' Hoje';
+            break;
+        default : 
+            leaderBoardType = '';
+            break;
+    }
+    let message = '💩💩💩 Líderes ' + leaderBoardType + '💩💩💩\n\n';
+    const weeklyPoopers = await getBrownLeaders(type);
+
+    for (let i = 0; i < weeklyPoopers.length; i++) { 
+        const pooper = weeklyPoopers[i];
+        let aux = '';
+        if (i == 0) aux = '🥇 ';
+        else if (i == 1) aux = '🥈 ';
+        else if (i == 2) aux = '🥉 ';
+        aux = aux + pooper.pooper.name + ' -> 💩x' + pooper.count + '\n';
+        message = message + aux; 
+    }
+    
+    const finalMessage = (weeklyPoopers != null && weeklyPoopers.length > 0) ?
+                message : ('Ainda ninguém pintou a Sanita ' + leaderBoardType.substring(1));
+    return finalMessage;
+}
 
 client.on('qr', (qr) =>  {
     qrcode.generate(qr, {small : true});
@@ -20,44 +55,55 @@ client.on('message', async (message) => {
 	switch(message.body){
         case '/enrole' : 
             // Entrar no concurso criar participante ou informasr que já está inscrito caso se verifique
-            const added = addPooper(sender.number, sender.pushname != null ? sender.pushname : sender.number);
-            added.then(result => {
-                var returnMessage = '';
-                switch(result){
-                    case -1 :
-                        returnMessage += '💩💩💩 ERRO 💩💩💩\nNão foi posível a inscrição.\nTente a descarga mais tarde.';
-                        break;
-                    case 0 : 
-                        returnMessage += '💩💩💩 INFO 💩💩💩\nJá faz parte do Gang Castanho';
-                        break;
-                    case 1 : 
-                        returnMessage += '💩💩💩 BEM VINDO 💩💩💩\n@' + sender.id.user + ' os seus cagalhões não serão esquecidos.';
-                        break;
-                };
-                client.sendMessage(message.from, returnMessage, { mentions: [sender.id._serialized]});
-            });
+            const result = await addPooper(sender.number, sender.pushname != null ? sender.pushname : sender.number);
+            let enroleMessage
+            switch(result){
+                case -1 :
+                    enroleMessage = '💩💩💩 ERRO 💩💩💩\nNão foi posível a inscrição.\nTente a descarga mais tarde.';
+                    break;
+                case 0 : 
+                    enroleMessage = '💩💩💩 INFO 💩💩💩\nJá faz parte do Gang Castanho';
+                    break;
+                case 1 : 
+                    enroleMessage = '💩💩💩 BEM VINDO 💩💩💩\n@' + sender.id.user + ' os seus cagalhões não serão esquecidos.';
+                    break;
+            };
+            client.sendMessage(message.from, enroleMessage, { mentions: [sender.id._serialized]});
             break;
         case '💩' :
             // Adiciona um cagalhão ao utilizador que enviou a mensagem
             await addPoop(sender.number);
             // Verfica milestones Diários / Mensais e Semanais
-            const milestoneMessage = await checkForMileStones(sender.number);
-            milestoneMessage.then(mileStone => {
-                if(mileStone != null)
-                    client.sendMessage(message.from, '💩💩💩 Parabéns 💩💩💩\n' + mileStone);
-            })
+            await checkMileStones(sender.number);
             break;
         case '/stats' : 
-            client.sendMessage(message.from, '💩💩💩 ESTATÍSTICA 💩💩💩\n Cagalhoto em desenvolvimento');
-            break;
+            const pooper = await getPooperByPhone(sender.number);
+            const statsMessage = '💩💩💩 @' + sender.id.user + ' 💩💩💩\n' + 
+                            "\nUtima pintura de sanita -> " + new Date(await queryLastPoop(sender.number)) +
+                            "\nHoje -> 💩x" + await getBrownCount('d', sender.number)  + 
+                            "\nEsta Semana -> 💩x" + await getBrownCount('m', sender.number) +
+                            "\nEste Mês -> 💩x" + await getBrownCount('w', sender.number) + 
+                            "\nTotal -> 💩x" + await getBrownCount(null, sender.number) +
+                            "\nPrimeiro poio do dia -> 🥇x" + pooper.firsts + 
+                            "\nPódios -> 🏆x" + pooper.podiums ;
 
-        case '/leaderboard' : 
-            client.sendMessage(message.from, '💩💩💩 ESTATÍSTICA 💩💩💩\n Cagalhoto em desenvolvimento');
+            client.sendMessage(message.from, statsMessage, { mentions: [sender.id._serialized] });
             break;
-        case '/leaderboard' : 
-            client.sendMessage(message.from, '💩💩💩 ESTATÍSTICA 💩💩💩\n Cagalhoto em desenvolvimento');
+        case '/weekly' : 
+            client.sendMessage(message.from, await showLeaderBoard('w'));
             break;
+        case '/monthly' : 
+            client.sendMessage(message.from, await showLeaderBoard('m'));
+            break;
+        case '/daily' : 
+            client.sendMessage(message.from, await showLeaderBoard('d'));
+            break;
+        case '/total' : 
+            client.sendMessage(message.from, await showLeaderBoard(null));
+            break;
+        
     }
+    const recordNotShown = await checkPoopingRecords();
 });
  
 
