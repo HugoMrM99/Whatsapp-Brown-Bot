@@ -3,9 +3,18 @@ const qrcode = require('qrcode-terminal');
 const chatCode = '120363180567061733@g.us';
 
 const { addPooper, addPoop, checkMileStones, getBrownCount, checkPoopingRecords, 
-    getPooperByPhone, queryLastPoop, getBrownLeaders } = require('./dbmanipulation.js');
-const { Client, LocalAuth, MessageAck } = require('whatsapp-web.js');
+    getPooperByPhone, queryLastPoop, getBrownLeaders } = require('./dbaccess.js');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const client = new Client({ authStrategy : new LocalAuth()});
+
+var nextCheck;
+resetNextCheck();
+
+function resetNextCheck(){
+    nextCheck = new Date(Date.now() + 1000 * 60 * 60);
+    nextCheck.setSeconds(0, 0);
+    console.log('Checking things....');
+}
 
 async function showLeaderBoard(type){
     let leaderBoardType = '';
@@ -32,7 +41,7 @@ async function showLeaderBoard(type){
         if (i == 0) aux = '🥇 ';
         else if (i == 1) aux = '🥈 ';
         else if (i == 2) aux = '🥉 ';
-        aux = aux + pooper.pooper.name + ' -> 💩x' + pooper.count + '\n';
+        aux = aux + pooper.name + ' -> 💩x' + pooper.poops + '\n';
         message = message + aux; 
     }
     
@@ -74,18 +83,19 @@ client.on('message', async (message) => {
             // Adiciona um cagalhão ao utilizador que enviou a mensagem
             await addPoop(sender.number);
             // Verfica milestones Diários / Mensais e Semanais
-            await checkMileStones(sender.number);
+            const milestones = await checkMileStones(sender.number);
+            for(let milestone of milestones){
+                client.sendMessage(message.from, '💩🥳💩🥳 PARABÉNS 💩🥳💩🥳\n' + '@' + 
+                    sender.id.user + ' ' + milestone, { mentions: [sender.id._serialized] });    
+            }
             break;
         case '/stats' : 
             const pooper = await getPooperByPhone(sender.number);
             const statsMessage = '💩💩💩 @' + sender.id.user + ' 💩💩💩\n' + 
-                            "\nUtima pintura de sanita -> " + new Date(await queryLastPoop(sender.number)) +
-                            "\nHoje -> 💩x" + await getBrownCount('d', sender.number)  + 
-                            "\nEsta Semana -> 💩x" + await getBrownCount('m', sender.number) +
-                            "\nEste Mês -> 💩x" + await getBrownCount('w', sender.number) + 
-                            "\nTotal -> 💩x" + await getBrownCount(null, sender.number) +
-                            "\nPrimeiro poio do dia -> 🥇x" + pooper.firsts + 
-                            "\nPódios -> 🏆x" + pooper.podiums ;
+                            "\nÚltima pintura de sanita -> " + new Date(await queryLastPoop(sender.number)) +
+                            "\nHoje -> 💩x" + pooper.day  + "\nEsta Semana -> 💩x" + pooper.week +
+                            "\nEste Mês -> 💩x" + pooper.month + "\nTotal -> 💩x" + pooper.total +
+                            "\nPrimeiro poio do dia -> 🥇x" + pooper.firsts + "\nPódios -> 🏆x" + pooper.podiums ;
 
             client.sendMessage(message.from, statsMessage, { mentions: [sender.id._serialized] });
             break;
@@ -103,7 +113,14 @@ client.on('message', async (message) => {
             break;
         
     }
-    const recordNotShown = await checkPoopingRecords();
+    
+    if (Date.now() > nextCheck.getTime()){
+        const messages = checkPoopingRecords();
+        resetNextCheck();
+
+
+    }
+    
 });
  
 
