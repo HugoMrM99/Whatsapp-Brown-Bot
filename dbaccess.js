@@ -6,28 +6,6 @@ const uri = "mongodb+srv://" + mongoUser + ":" + mongoPass + "@browncluster.btfz
 
 const client = new MongoClient(uri);
 
-async function addPooper(pooperId, pooperName){
-    try {
-        await client.connect();
-        const database = client.db('BrownDB');
-        const poopers = database.collection('participants');
-        const pooper = await poopers.findOne({ id: pooperId});
-        if (pooper != null) return 0;
-        // New pooper info
-        const newPooper = {
-            "id" : pooperId,
-            "name": pooperName,
-            "podiums": 0,
-            "firsts": 0
-        };
-        const result = await poopers.insertOne(newPooper);
-        return result.acknowledged ? 1 : -1;
-    } finally {
-        // Ensures that the client will close when you finish/error
-        await client.close();
-    }
-}
-
 async function addPoop(pooperId){
     try {
         await client.connect();
@@ -54,35 +32,6 @@ async function addPoop(pooperId){
     }
 }
 
-function getStartOfWeek() {
-    const now = new Date();
-    const dayOfWeek = now.getDay(); // 0 is Sunday, 1 is Monday, ..., 6 is Saturday
-    const diff = now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // adjust when Sunday
-    const startOfWeek = new Date(now.setDate(diff));
-    
-    // Set hours, minutes, seconds, and milliseconds to the beginning of the day
-    startOfWeek.setHours(0, 0, 0, 0);
-    
-    return startOfWeek.getTime();
-}
-
-function getStartOfMonth() {
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
-    // Set hours, minutes, seconds, and milliseconds to the beginning of the day
-    startOfMonth.setHours(0, 0, 0, 0);
-    
-    return startOfMonth.getTime();
-}
-
-function getStartOfDay() {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    
-    return startOfDay.getTime();
-}
-
 async function queryLastPoop(pooperId) {
     try {
         await client.connect();
@@ -105,7 +54,7 @@ async function queryLastPoop(pooperId) {
     }
 }
 
-async function getBrownLeaders(typeCount){
+async function getBrownLeaders(dateFilter){
     try {
         await client.connect();
         const database = client.db('BrownDB');
@@ -126,42 +75,11 @@ async function getBrownLeaders(typeCount){
          ];
 
         // Filter according to the type of Count weekly, monthly or daily ( total count default )
-        if(typeCount === 'w')
-            queryFilter.date = { $gte: getStartOfWeek() };
-        else if(typeCount === 'm')
-            queryFilter.date = { $gte: getStartOfMonth() };
-        else if(typeCount === 'd')
-            queryFilter.date = { $gte: getStartOfDay() };
+        if(dateFilter != null )
+            queryFilter.date = dateFilter;
 
         const leaderboard = await poops.aggregate(pipeline).toArray();
         return leaderboard == null ? null : leaderboard;
-    } finally {
-        // Ensures that the client will close when you finish/error
-        await client.close();
-    }
-}
-
-
-async function getBrownCount(typeCount, pooper){
-    try {
-        await client.connect();
-        const database = client.db('BrownDB');
-        const poops = database.collection('browns');
-        // Query for weekly Poops
-        const pipeline = [
-            { $match: { participant: pooper}}
-        ];
-
-        // Filter according to the type of Count weekly, monthly or daily ( total count default )
-        if(typeCount === 'w')
-            pipeline[0].$match.date = { $gte: getStartOfWeek() };
-        else if(typeCount === 'm')
-            pipeline[0].$match.date = { $gte: getStartOfMonth() };
-        else if(typeCount === 'd')
-            pipeline[0].$match.date = { $gte: getStartOfDay() };
-
-        const leaderboard = await poops.aggregate(pipeline).toArray();
-        return (leaderboard == null || leaderboard.length == 0) ? 0 : leaderboard.length;
     } finally {
         // Ensures that the client will close when you finish/error
         await client.close();
@@ -198,7 +116,7 @@ async function getPooperByPhone(pooperId){
 }
 
 async function checkFirstOfTheDay(){
-    const leaders = await getBrownLeaders('d');
+    const leaders = await getBrownLeaders({ $gte: getStartOfWeek() });
 
     if (leaders != null && leaders.length > 1 && leaders[0].poops === 1 && leaders[1].poops === 0){
         const first = leaders[0];
@@ -252,9 +170,28 @@ async function checkMileStones(pooperId){
     return mileStones;
 }
 
-async function checkPoopingRecords(){
-    checkConstipation();
-    return [];
+async function checkPoopingRecords(previousDay, day){
+    const recordsMessages = []
+    
+    if (day.getDate() != previousDay.getDate()){
+        recordsMessages.push({ number: 'd'});
+        if (day.getMonth() != previousDay.getMonth()){
+            // Start of the Month
+            //updatePodiums('m');
+            recordsMessages.push({ number: 'm'});
+        }
+        if (day.getDay() === 1){
+            // Start of the Week
+            //updatePodiums('w');
+            recordsMessages.push({ number: 'w'});
+        }
+    }
+
+    // Check for constipation
+    const constipated = await checkConstipation();
+    constipated.forEach(c => recordsMessages.push(c));
+
+    return recordsMessages;
 }
  
 function getDaysHoursMinutes(interval){
@@ -277,7 +214,7 @@ async function checkConstipation(){
         const database = client.db('BrownDB');
         const poops = database.collection('participants');
         // Query for last Poop of each participant
-        const day = 1000 * 60 * 60 * 24;
+        const day = 60 * 60 * 24 * 1000;
         const pipeline = [{
               $lookup: { from: "browns", let: { main: "$id"},
                 pipeline: [ { $sort: { date: -1 } },
@@ -288,13 +225,78 @@ async function checkConstipation(){
             { $match: { interval: { $gte: day } } } ];
 
         const constipation = await poops.aggregate(pipeline).toArray();
+        const consts = [];
         for(const constipated of constipation){
-            console.log(constipated.name, ' nao caga há ', getDaysHoursMinutes(constipated.interval));
+            const msg = '💩💩💩 ATENÇÃO 💩💩💩\nEstá tudo bem @' + constipated.id + 
+            '?\nJá não cagas há ' + getDaysHoursMinutes(constipated.interval);
+            consts.push({number: constipated.id, message: msg });
         }
+        return consts;
     } finally {
         // Ensures that the client will close when you finish/error
         await client.close();
     }
 }
 
-module.exports = { addPooper, addPoop, checkMileStones, queryLastPoop, getBrownCount, getBrownLeaders, checkPoopingRecords, getPooperByPhone, checkConstipation };
+async function startSpecialEvent(eventName){
+    try {
+        await client.connect();
+        const database = client.db('BrownDB');
+        const events = database.collection('events');
+
+        // Create a filter to update the correct Pooper
+        const newEvent = { "name": eventName,  "start": Date.now()};
+
+        const eventAdded = await events.insertOne(newEvent);
+        return eventAdded != null && eventAdded.acknowledged ? 'Evento ' + eventName + ' iniciado com sucesso.' : null;
+    } finally {
+        // Ensures that the client will close when you finish/error
+        await client.close();
+    }
+}
+
+async function endSpecialEvent(eventName){
+    try {
+        await client.connect();
+        const database = client.db('BrownDB');
+        const events = database.collection('events');
+        const endDate = Date.now();
+
+        const eventInfo = await events.findOne({name: eventName});
+        if (eventInfo == null) return null;
+        
+        const eventLeaders = await getBrownLeaders({ $gte: eventInfo.start, $lte: endDate});
+        if (eventLeaders == null ) return;
+
+        const result = { end: endDate, leaders: eventLeaders };
+        return result;
+    } finally {
+        // Ensures that the client will close when you finish/error
+        await client.close();
+    }
+}
+
+async function updateEvent(eventName, result){
+    try {
+        await client.connect();
+        const database = client.db('BrownDB');
+        const events = database.collection('events');
+    
+        const update = await events.updateOne({name: eventName}, { $set: { end: result.end, leaders: result.leaders }});
+        return (update != null && update.modifiedCount > 0);
+    } finally {
+        // Ensures that the client will close when you finish/error
+        await client.close();
+    }
+}
+
+
+module.exports = { addPoop, checkMileStones, queryLastPoop, getBrownLeaders, endSpecialEvent,
+    checkPoopingRecords, getPooperByPhone, checkConstipation, startSpecialEvent, updateEvent };
+
+//const constipation = checkPoopingRecords();
+//constipation.then(poopers => {
+//   for (const pooper of poopers){
+//        console.log(pooper.message);
+//    }
+//});
